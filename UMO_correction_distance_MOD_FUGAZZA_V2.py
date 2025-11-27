@@ -452,7 +452,7 @@ def calculate_UMO_stats(feature, df_raw, performance_list, pollution_folder, sen
 
     # Merge stats into aggregated_cm. Stats repeated per sensitive attribute row.
     if aggregated_cm.empty:
-        summary_df = _pd.DataFrame({
+        summary_df = pd.DataFrame({
             'tn': [],
             'fp': [],
             'fn': [],
@@ -487,7 +487,7 @@ def calculate_UMO_stats(feature, df_raw, performance_list, pollution_folder, sen
                     for attr in bias_means.index:
                         if attr not in summary_df.index:
                             # create row for attr with NaNs for existing columns
-                            summary_df.loc[attr] = [ _np.nan ] * summary_df.shape[1]
+                            summary_df.loc[attr] = [ np.nan ] * summary_df.shape[1]
                     # now assign column values
                     summary_df[col] = bias_means[col]
 
@@ -495,17 +495,25 @@ def calculate_UMO_stats(feature, df_raw, performance_list, pollution_folder, sen
     try:
         if (df_raw is not None) and (not df_raw.empty):
             raw_outpath = os.path.join(pollution_folder, f"{feature}_umo_raw.csv")
-            # save only the UMO_* columns plus sensitive column to reduce size if present
+            # save UMO_* columns plus sensitive column and prediction correctness columns
             cols_to_save = [c for c in df_raw.columns if str(c).startswith("UMO_")]
             if sensitive_column_name in df_raw.columns:
                 cols_to_save = [sensitive_column_name] + cols_to_save
+            # add prediction and true_class columns for filtering
+            if 'mean_pred_0_removed_ft' in df_raw.columns:
+                cols_to_save.append('mean_pred_0_removed_ft')
+            if 'true_class' in df_raw.columns:
+                cols_to_save.append('true_class')
+            # add iteration column for averaging across iterations
+            if 'iteration' in df_raw.columns:
+                cols_to_save.append('iteration')
             # fallback: if no UMO_* columns, save entire df_raw
             if not cols_to_save:
                 df_raw.to_csv(raw_outpath, index=False)
             else:
                 df_raw[cols_to_save].to_csv(raw_outpath, index=False)
-    except Exception as _e:
-        print(f"Warning: could not save raw UMO CSV for feature '{feature}' in '{pollution_folder}': {_e}")
+    except Exception as e:
+        print(f"Warning: could not save raw UMO CSV for feature '{feature}' in '{pollution_folder}': {e}")
 
     # Save the combined summary CSV for this feature inside the pollution folder
     outpath = os.path.join(pollution_folder, f"{feature}_summary.csv")
@@ -544,6 +552,7 @@ def iterate_process(X_test, y_test, feat_to_remove, sensitive_column_name, sensi
                     bias = round(bias, 1)
                     res = predict_on_biased_dataset(X_test.copy(), sensitive_column_name, sensitive_attribute_value, bias, features_bias_ranges, feat, k, y_test, feat_to_remove, pollution_mode, mode='baseline', reg_model_features=reg_model_features, umo_input_features=umo_input_features)
                     res['feature'] = feat
+                    res['iteration'] = k  # Add iteration number
 
                     # keep a copy of the raw result before renaming/grouping for stats aggregation
                     res_for_stats = res.copy()
