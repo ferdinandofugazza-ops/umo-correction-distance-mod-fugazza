@@ -79,18 +79,18 @@ def plot_umo_mean_vs_bias(output_path, feature_names, feature_weights, sensitive
                     # Plot correct predictions (TP + TN)
                     if not df_correct.empty:
                         y_correct = [df_correct[col].mean() for col in per_bias_cols]
-                        ax.plot(biases_found, y_correct, marker='', label=f'Attr={attr} (Correct)', 
-                               linewidth=2, markersize=6, linestyle='-')
+                        ax.plot(biases_found, y_correct, marker='o', label=f'Attr={attr} (Correct)', 
+                               linewidth=2, markersize=6, linestyle='-', color='C1')
                     
                     # Plot incorrect predictions (FP + FN)
                     if not df_incorrect.empty:
                         y_incorrect = [df_incorrect[col].mean() for col in per_bias_cols]
                         ax.plot(biases_found, y_incorrect, marker='o', label=f'Attr={attr} (Incorrect)', 
-                               linewidth=2, markersize=6, linestyle='-')
+                               linewidth=2, markersize=6, linestyle='-', color='C2')
                 else:
                     # For non-sensitive attribute, plot as before
                     y = [df_attr[col].mean() for col in per_bias_cols]
-                    ax.plot(biases_found, y, marker='s', label=f'Attr={attr}', linewidth=2, markersize=6, linestyle='--')
+                    ax.plot(biases_found, y, marker='s', label=f'Attr={attr}', linewidth=2, markersize=6, linestyle='--', color='C0')
             
             ax.set_ylabel('Mean UMO Level', fontsize=11)
             ax.set_xlabel(f'Noise Coefficient for {sensitive_attribute_value} individuals over {feat}', fontsize=11)

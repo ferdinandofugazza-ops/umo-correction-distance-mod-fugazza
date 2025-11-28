@@ -58,14 +58,12 @@ def score_computation (df):
 
     return df, beta
 
-# Definiamo la funzione per generare il dataset sintetico
 def generate_synthetic_dataset(
     n_samples=20000,
     random_state=0,
 ):
     rng = np.random.default_rng(random_state)
 
-    # Feature di base indipendenti
     x1 = rng.normal(loc=0, scale=1, size=n_samples)
     x2 = rng.normal(loc=0, scale=1, size=n_samples)
     x3 = rng.normal(loc=0, scale=1, size=n_samples)
@@ -310,8 +308,7 @@ def add_noise(row, biased_column, bias, sensitive_attribute, bias_range, sensiti
 def calculate_UMO(df, umo_input_features):
     start_time = time.time()  # Start timing
     
-    df_selected = df[umo_input_features].copy() # Ensure only relevant features are considered for UMO
-    # 
+    df_selected = df[umo_input_features].copy() 
     baseline = df_selected.iloc[:, 0]  # First column as baseline 
     diffs = df_selected.ne(baseline, axis=0)  # Compare each column with the baseline
     first_diff = diffs.values.argmax(axis=1) - 1
@@ -354,9 +351,10 @@ def predict_on_biased_dataset(X_test, sensitive_column_name, sensitive_attribute
         for subset_idx, subset in enumerate(combinations(umo_input_features, i)):
             data_copy = data.copy()
 
-            # evitare di rimuovere la feature che sta venendo inquinata nel ciclo di pollution
-            # dentro ad iterate_process
-            # if polluted_feat in subset: return
+            # Evitato di rimuovere la feature che sta venendo inquinata (deve sempre essere presente in prediction)
+            if i > 0 and (biased_column in subset):
+                continue
+
             if i == 0:
                 pass
             else:
@@ -384,8 +382,7 @@ def predict_on_biased_dataset(X_test, sensitive_column_name, sensitive_attribute
 
     total['true_class'] = y_test.reset_index(drop=True).astype(int)
     
-    # Calcola UMO usando la funzione calculate_UMO
-    cols = [f'mean_pred_{i}_removed_ft' for i in range(len(umo_input_features) + 1)]
+    cols = [f'mean_pred_{i}_removed_ft' for i in range(len(umo_input_features) + 1) if f'mean_pred_{i}_removed_ft' in total.columns]
     total['UMO'] = calculate_UMO(total, cols)
 
     total[sensitive_column_name] = data[sensitive_column_name]
@@ -405,7 +402,6 @@ def calculate_performance(sensitive_column_name, res):
         y_pred_for_cm = new_df['mean_pred_0_removed_ft']
         y_true_for_cm = new_df['true_class']
 
-        # corretto ordine della confusion matrix 
         dictionary[attr] = confusion_matrix(y_true_for_cm, y_pred_for_cm, labels=[0, 1]).ravel()
 
     overall = pd.DataFrame.from_dict(dictionary, orient='index', columns=['tn', 'fp', 'fn', 'tp'])
@@ -491,7 +487,7 @@ def calculate_UMO_stats(feature, df_raw, performance_list, pollution_folder, sen
                     # now assign column values
                     summary_df[col] = bias_means[col]
 
-    # --- SAVE RAW UMO DATAFRAME FOR PLOTTING ---
+    # save raw UMO dataframe for plotting
     try:
         if (df_raw is not None) and (not df_raw.empty):
             raw_outpath = os.path.join(pollution_folder, f"{feature}_umo_raw.csv")
@@ -608,8 +604,6 @@ def iterate_process(X_test, y_test, feat_to_remove, sensitive_column_name, sensi
 #         iterate_process(X_test, y_test, sensitive_column=sensitive_column, sensitive_attribute=sensitive_attribute, num_iterations=5, minority=minority_rate)
 #         make_plots('mean', output_path, feature_names)
 #         #make_plots('median', output_path, feature_names)
-#
-
 
 for minority_rate in [0.5]:#np.arange(0.5, 1, 0.1):
 
