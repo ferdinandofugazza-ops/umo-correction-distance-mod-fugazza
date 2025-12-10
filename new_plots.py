@@ -8,7 +8,7 @@ from matplotlib import pyplot as plt
 def plot_umo_mean_vs_bias(output_path, feature_names, feature_weights, sensitive_column_name=None, sensitive_attribute_value=None, num_iterations=None):
     """
     Plot mean UMO level vs bias coefficient for each feature across all pollution modes.
-    For the sensitive attribute, plots separate lines for correct predictions (TP+TN) and incorrect predictions (FP+FN).
+    For all attributes, plots separate lines for correct predictions (TP+TN) and incorrect predictions (FP+FN).
     
     Parameters:
     -----------
@@ -55,7 +55,31 @@ def plot_umo_mean_vs_bias(output_path, feature_names, feature_weights, sensitive
             
             # Check if we have the necessary columns for prediction correctness
             has_pred_cols = ('mean_pred_0_removed_ft' in df_raw.columns) and ('true_class' in df_raw.columns)
-            
+            # NEW: check iterations and helper for mean/SEM
+            has_iterations = 'iteration' in df_raw.columns
+
+            def mean_sem_over_iterations(df_subset, cols):
+                means, sems = [], []
+                if df_subset is None or df_subset.empty:
+                    return np.array([]), np.array([])
+                if has_iterations:
+                    grouped = df_subset.groupby('iteration')
+                    for col in cols:
+                        per_iter_means = grouped[col].mean().dropna()
+                        if per_iter_means.empty:
+                            means.append(np.nan)
+                            sems.append(np.nan)
+                        else:
+                            means.append(per_iter_means.mean())
+                            n = len(per_iter_means)
+                            sems.append(per_iter_means.std(ddof=1) / np.sqrt(n) if n > 1 else 0.0)
+                else:
+                    # No iterations: keep original behavior (no bands)
+                    for col in cols:
+                        means.append(df_subset[col].mean())
+                        sems.append(np.nan)
+                return np.array(means), np.array(sems)
+
             # sort per_bias_cols by numeric bias extracted from the column name
             def bias_from_col(c):
                 try:
@@ -65,38 +89,59 @@ def plot_umo_mean_vs_bias(output_path, feature_names, feature_weights, sensitive
             per_bias_cols = sorted(per_bias_cols, key=bias_from_col)
             biases_found = [bias_from_col(c) for c in per_bias_cols]
             
+            # Color scheme: different colors for sensitive vs non-sensitive
+            color_map = {}
+            
             # For each sensitive attribute value
-            for attr in df_raw[sensitive_column_name].unique() if sensitive_column_name in df_raw.columns else []:
+            for attr_idx, attr in enumerate(sorted(df_raw[sensitive_column_name].unique()) if sensitive_column_name in df_raw.columns else []):
                 df_attr = df_raw[df_raw[sensitive_column_name] == attr]
                 
-                if attr == sensitive_attribute_value and has_pred_cols:
-                    # For sensitive attribute, split into correct and incorrect predictions
-                    # Correct: (pred == 1 and true == 1) OR (pred == 0 and true == 0)
+                # Determine colors based on whether this is the sensitive attribute
+                if attr == sensitive_attribute_value:
+                    color_correct = 'C1'  # Orange for sensitive correct
+                    color_incorrect = 'C3'  # Red for sensitive incorrect
+                    attr_label = f'Attr={attr} (Sensitive)'
+                else:
+                    color_correct = 'C0'  # Blue for non-sensitive correct
+                    color_incorrect = 'C2'  # Green for non-sensitive incorrect
+                    attr_label = f'Attr={attr}'
+                
+                if has_pred_cols:
+                    # Split into correct and incorrect predictions for all attributes
                     correct_mask = (df_attr['mean_pred_0_removed_ft'] == df_attr['true_class'])
                     df_correct = df_attr[correct_mask]
                     df_incorrect = df_attr[~correct_mask]
                     
                     # Plot correct predictions (TP + TN)
                     if not df_correct.empty:
-                        y_correct = [df_correct[col].mean() for col in per_bias_cols]
-                        ax.plot(biases_found, y_correct, marker='o', label=f'Attr={attr} (Correct)', 
-                               linewidth=2, markersize=6, linestyle='-', color='C1')
-                    
+                        y_correct, se_correct = mean_sem_over_iterations(df_correct, per_bias_cols)
+                        ax.plot(biases_found, y_correct, marker='o', label=f'{attr_label} (Correct)',
+                                linewidth=2, markersize=6, linestyle='-', color=color_correct)
+                        if has_iterations and y_correct.size:
+                            ax.fill_between(biases_found, y_correct - se_correct, y_correct + se_correct,
+                                            color=color_correct, alpha=0.2, linewidth=0)
+
                     # Plot incorrect predictions (FP + FN)
                     if not df_incorrect.empty:
-                        y_incorrect = [df_incorrect[col].mean() for col in per_bias_cols]
-                        ax.plot(biases_found, y_incorrect, marker='o', label=f'Attr={attr} (Incorrect)', 
-                               linewidth=2, markersize=6, linestyle='-', color='C2')
+                        y_incorrect, se_incorrect = mean_sem_over_iterations(df_incorrect, per_bias_cols)
+                        ax.plot(biases_found, y_incorrect, marker='s', label=f'{attr_label} (Incorrect)',
+                                linewidth=2, markersize=6, linestyle='--', color=color_incorrect)
+                        if has_iterations and y_incorrect.size:
+                            ax.fill_between(biases_found, y_incorrect - se_incorrect, y_incorrect + se_incorrect,
+                                            color=color_incorrect, alpha=0.2, linewidth=0)
                 else:
-                    # For non-sensitive attribute, plot as before
-                    y = [df_attr[col].mean() for col in per_bias_cols]
-                    ax.plot(biases_found, y, marker='s', label=f'Attr={attr}', linewidth=2, markersize=6, linestyle='--', color='C0')
-            
+                    # Fallback if prediction columns not available
+                    y, se = mean_sem_over_iterations(df_attr, per_bias_cols)
+                    ax.plot(biases_found, y, marker='o', label=attr_label, linewidth=2,
+                            markersize=6, linestyle='-')
+                    if has_iterations and y.size:
+                        ax.fill_between(biases_found, y - se, y + se, alpha=0.2, linewidth=0)
+
             ax.set_ylabel('Mean UMO Level', fontsize=11)
             ax.set_xlabel(f'Noise Coefficient for {sensitive_attribute_value} individuals over {feat}', fontsize=11)
             ax.set_title(f'{pollution_mode.replace("_", " ").title()}', fontsize=12, fontweight='bold')
             ax.grid(True, alpha=0.3)
-            ax.legend()
+            ax.legend(fontsize=8)
         
         fig.suptitle(f'Mean UMO Level vs Bias Coefficient - Feature: {feat}, Feature weight: {feature_weights[feat]}\nNumber of iterations: {num_iterations}', fontsize=11, fontweight='bold')
         fig.tight_layout(rect=[0, 0, 1, 0.96])

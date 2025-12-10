@@ -280,7 +280,7 @@ def add_noise(row, biased_column, bias, sensitive_attribute, bias_range, sensiti
 
     elif pollution_mode == 'probabilistic_pollution':
         if row[sensitive_column] == sensitive_attribute:
-            coin_toss = np.random.choice([1, 0], p=[0.6, 0.4])
+            coin_toss = np.random.choice([1, 0], p=[0.8, 0.2])
             if coin_toss == 1:
                 output_biased = row[biased_column] * bias
                 if output_biased < bias_range[biased_column][0]:
@@ -293,7 +293,7 @@ def add_noise(row, biased_column, bias, sensitive_attribute, bias_range, sensiti
     elif pollution_mode == 'probabilistic_half_lies':
         if row[sensitive_column] == sensitive_attribute:
             if row[biased_column] >= biased_feature_threshold:
-                coin_toss = np.random.choice([1, 0], p=[0.5, 0.5])
+                coin_toss = np.random.choice([1, 0], p=[0.8, 0.2])
                 if coin_toss == 1:
                     output_biased = row[biased_column] * bias
                     if output_biased < bias_range[biased_column][0]:
@@ -310,7 +310,12 @@ def calculate_UMO(df, umo_input_features):
     
     df_selected = df[umo_input_features].copy() 
     baseline = df_selected.iloc[:, 0]  # First column as baseline 
-    diffs = df_selected.ne(baseline, axis=0)  # Compare each column with the baseline
+
+    # Differenza minima per considerare uno switch
+    switch_threshold = 0.05
+
+    # Confronta ciascuna colonna con la baseline usando la soglia
+    diffs = df_selected.subtract(baseline, axis=0).abs() > switch_threshold
     first_diff = diffs.values.argmax(axis=1) - 1
     # Get the first different column index
     # If no deviation, set to None
@@ -370,20 +375,27 @@ def predict_on_biased_dataset(X_test, sensitive_column_name, sensitive_attribute
             prediction_scores = np.nan_to_num(prediction_scores, nan=0.5)
 
             col_name_for_subset_prediction = f'pred_i{i}_s{subset_idx}'
-            temp_predictions_df[col_name_for_subset_prediction] = cutoff_prediction(prediction_scores, optimal_threshold)
+            # Store continuous predictions (no binarization yet)
+            temp_predictions_df[col_name_for_subset_prediction] = prediction_scores
 
         mean_pred_col_name = f'mean_pred_{i}_removed_ft'
         if not temp_predictions_df.empty:
             mean_predictions = temp_predictions_df.agg("mean", axis="columns")
             mean_predictions = np.nan_to_num(mean_predictions, nan=0.5)
-            df_list.append(pd.DataFrame({mean_pred_col_name: cutoff_prediction(mean_predictions, optimal_threshold)}))
+            # Store continuous mean predictions
+            df_list.append(pd.DataFrame({mean_pred_col_name: mean_predictions}))
 
     total = pd.concat(df_list, axis=1, ignore_index=False)
 
     total['true_class'] = y_test.reset_index(drop=True).astype(int)
     
     cols = [f'mean_pred_{i}_removed_ft' for i in range(len(umo_input_features) + 1) if f'mean_pred_{i}_removed_ft' in total.columns]
+    # Calculate UMO on continuous values
     total['UMO'] = calculate_UMO(total, cols)
+
+    # Binarize predictions after UMO calculation
+    for col in cols:
+        total[col] = cutoff_prediction(total[col], optimal_threshold)
 
     total[sensitive_column_name] = data[sensitive_column_name]
 
