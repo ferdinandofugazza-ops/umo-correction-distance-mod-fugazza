@@ -280,7 +280,7 @@ def add_noise(row, biased_column, bias, sensitive_attribute, bias_range, sensiti
 
     elif pollution_mode == 'probabilistic_pollution':
         if row[sensitive_column] == sensitive_attribute:
-            coin_toss = np.random.choice([1, 0], p=[0.8, 0.2])
+            coin_toss = np.random.choice([1, 0], p=[0.6, 0.4])
             if coin_toss == 1:
                 output_biased = row[biased_column] * bias
                 if output_biased < bias_range[biased_column][0]:
@@ -644,7 +644,7 @@ for minority_rate in [0.5]:#np.arange(0.5, 1, 0.1):
 
         reg = cls # Assign the trained model to 'reg'
         reg_model_features = model_trained_features # Get the actual feature names the model was trained with
-        num_iterations = 10
+        num_iterations = 1
 
         iterate_process(X_test, y_test, feat_to_remove, sensitive_column_name=sensitive_column_name, sensitive_attribute_value=sensitive_attribute_value, num_iterations=num_iterations, minority=minority_rate, reg_model_features=reg_model_features, umo_input_features=umo_input_features)
         # mode_list = ['baseline']
