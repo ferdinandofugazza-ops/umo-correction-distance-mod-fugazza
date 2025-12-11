@@ -19,6 +19,7 @@ from sklearn.metrics import f1_score, accuracy_score, precision_score, recall_sc
 from plots import make_plots
 from new_plots import plot_umo_mean_vs_bias, plot_umo_statistics_summary
 from scipy.special import expit
+import shap
 
 
 # funzione per calcolare y sul dataset sintetico
@@ -132,6 +133,20 @@ def find_optimal_threshold(y_true, y_pred_proba, metric='f1'):
 
     return best_threshold
 
+def shap_values_compute(reg, X_test):
+
+    shap_explainer = shap.Explainer(reg.predict, X_test)
+    shap_values = shap_explainer(X_test)
+
+    shap.summary_plot(shap_values, X_test, plot_type="bar", show=False)
+    plt.savefig("shap_summary_plot.png", bbox_inches='tight', dpi=300)
+
+
+    shap.summary_plot(shap_values, X_test.reset_index(drop=True), plot_type="violin", show=False)
+    plt.savefig("shap_violin_plot.png", bbox_inches='tight', dpi=300)
+
+    return 
+
 def train_model(dataset, sensitive_column):
     df = dataset  #.set_index('Unnamed: 0').sort_index()
     X = df.iloc[:, :-1]  # All columns except the last one
@@ -241,6 +256,7 @@ def train_model_with_threshold_normalization_and_binarization(df, sensitive_colu
         optimal_threshold = find_optimal_threshold(y_test, y_pred_proba, metric='accuracy') # Calculate optimal threshold for classification too
         model = clf
 
+    shap_values_compute(model, X_test)
     return X_train, X_test, y_train, y_test, model, umo_input_features, model_trained_features, optimal_threshold
 
 def calculate_bias_range_by_feat():
@@ -614,7 +630,7 @@ for minority_rate in [0.5]:#np.arange(0.5, 1, 0.1):
         sensitive_column_name = 'dummy_sensitive'
         sensitive_attribute_value = 0
 
-        df, feature_weights = generate_synthetic_dataset(n_samples=10000, random_state=42)
+        df, feature_weights = generate_synthetic_dataset(n_samples=100, random_state=42)
         X_train, X_test, y_train, y_test, cls, umo_input_features, model_trained_features, optimal_threshold = train_model_with_threshold_normalization_and_binarization(df, sensitive_column_name)
         feat_to_remove = [] # Assuming feat_to_remove is defined globally or passed as an argument
 
@@ -632,7 +648,7 @@ for minority_rate in [0.5]:#np.arange(0.5, 1, 0.1):
 
         reg = cls # Assign the trained model to 'reg'
         reg_model_features = model_trained_features # Get the actual feature names the model was trained with
-        num_iterations = 10
+        num_iterations = 1
 
         iterate_process(X_test, y_test, feat_to_remove, sensitive_column_name=sensitive_column_name, sensitive_attribute_value=sensitive_attribute_value, num_iterations=num_iterations, minority=minority_rate, reg_model_features=reg_model_features, umo_input_features=umo_input_features)
         # mode_list = ['baseline']
