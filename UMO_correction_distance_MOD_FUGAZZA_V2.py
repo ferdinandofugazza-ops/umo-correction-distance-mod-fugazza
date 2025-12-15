@@ -136,15 +136,18 @@ def find_optimal_threshold(y_true, y_pred_proba, metric='f1'):
 def shap_values_compute(reg, X_test):
 
     shap_explainer = shap.Explainer(reg.predict, X_test)
-    shap_values = shap_explainer(X_test)
+    shap_values_obj = shap_explainer(X_test)
 
-    shap.summary_plot(shap_values, X_test, plot_type="bar", show=False)
+    # Extract numpy array
+    shap_values = shap_values_obj.values
+
+    shap.summary_plot(shap_values_obj, X_test, plot_type="bar", show=False)
     plt.savefig("shap_summary_plot.png", bbox_inches='tight', dpi=300)
 
-
-    shap.summary_plot(shap_values, X_test.reset_index(drop=True), plot_type="violin", show=False)
-    plt.savefig("shap_violin_plot.png", bbox_inches='tight', dpi=300)
-
+    for col in X_test.columns.drop("dummy_sensitive"):
+        shap.dependence_plot(col, shap_values, X_test.reset_index(drop=True), show=False)
+        plt.savefig(f"shap_dependence_plot_{col}.png", bbox_inches='tight', dpi=300)
+   
     return 
 
 def train_model(dataset, sensitive_column):
@@ -630,7 +633,7 @@ for minority_rate in [0.5]:#np.arange(0.5, 1, 0.1):
         sensitive_column_name = 'dummy_sensitive'
         sensitive_attribute_value = 0
 
-        df, feature_weights = generate_synthetic_dataset(n_samples=100, random_state=42)
+        df, feature_weights = generate_synthetic_dataset(n_samples=1000, random_state=42)
         X_train, X_test, y_train, y_test, cls, umo_input_features, model_trained_features, optimal_threshold = train_model_with_threshold_normalization_and_binarization(df, sensitive_column_name)
         feat_to_remove = [] # Assuming feat_to_remove is defined globally or passed as an argument
 
