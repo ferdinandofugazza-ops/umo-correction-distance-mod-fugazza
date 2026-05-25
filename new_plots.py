@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import seaborn as sns
 from matplotlib import pyplot as plt
+from matplotlib.colors import ListedColormap
 
 
 def plot_umo_mean_vs_bias(output_path, feature_names, feature_weights, sensitive_column_name=None, sensitive_attribute_value=None, num_iterations=None):

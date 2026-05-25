@@ -10,6 +10,7 @@ import pandas as pd
 from matplotlib import pyplot as plt
 from xgboost import XGBRegressor
 from xgboost import XGBClassifier
+from sklearn.decomposition import PCA
 from sklearn.metrics import mean_squared_error, confusion_matrix
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, accuracy_score, f1_score
@@ -19,6 +20,8 @@ from sklearn.metrics import f1_score, accuracy_score, precision_score, recall_sc
 from plots import make_plots
 from new_plots import plot_umo_mean_vs_bias, plot_umo_statistics_summary
 from scipy.special import expit
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.neighbors import KNeighborsClassifier
 
 
 # funzione per calcolare y sul dataset sintetico
@@ -26,7 +29,7 @@ def score_computation (df):
 
     # Coefficienti dei componenti per interpretability
     # Ognuno di questi coefficienti è il peso di ciascun componente nel calcolo dello score
-    beta = {"x1": 10, "x2": 1, "x3": 0, "x4": -10}
+    beta = {"x1": 3.5, "x2": 0.1, "x3": 0.5, "x4": -2.5}
 
     comp_x1 = beta["x1"] * df['x1']
     comp_x2 = beta["x2"] * df['x2']
@@ -64,10 +67,10 @@ def generate_synthetic_dataset(
 ):
     rng = np.random.default_rng(random_state)
 
-    x1 = rng.normal(loc=0, scale=1, size=n_samples)
+    x1 = rng.normal(loc=0, scale=4, size=n_samples)
     x2 = rng.normal(loc=0, scale=1, size=n_samples)
     x3 = rng.normal(loc=0, scale=1, size=n_samples)
-    x4 = rng.normal(loc=0, scale=1, size=n_samples)
+    x4 = rng.normal(loc=0, scale=3.5, size=n_samples)
 
     # we treat this variable as already encoded
     # sensitive feature updated so that it is interchangeable with the other regression pipeline
@@ -151,7 +154,7 @@ def train_model(dataset, sensitive_column):
                        eval_metric="rmse",  # Evaluation metric
                        verbosity=1  # Controls output logs (set to 0 for silent mode)
                        )
-
+    
     reg.fit(X_train, y_train)
     y_scores = reg.predict(X_test)
     optimal_threshold = find_optimal_threshold(y_test, y_scores, metric='f1')
@@ -169,7 +172,7 @@ def cutoff_prediction(score, optimal_threshold):
     return (score >= optimal_threshold).astype(int)
     #return score
 
-def train_model_with_threshold_normalization_and_binarization(df, sensitive_column):
+def train_model_with_threshold_normalization_and_binarization(df, sensitive_column, learner):
 
     # DA AGGIUNGERE: possibilità di allenare il modello su dati biased
     # e quindi inserire la pipeline di data pollution PRIMA di allenare il modello qui sotto
@@ -232,14 +235,30 @@ def train_model_with_threshold_normalization_and_binarization(df, sensitive_colu
             model = reg
 
     else:
-        # Classificazione binaria
-        clf = XGBClassifier(use_label_encoder=False, eval_metric='logloss', random_state=0)
-        clf.fit(X_train, y_train)
-        # For classification, we typically use a threshold of 0.5 on probabilities,
-        # or we could find an optimal one if desired.
-        y_pred_proba = clf.predict_proba(X_test)[:, 1]
-        optimal_threshold = find_optimal_threshold(y_test, y_pred_proba, metric='accuracy') # Calculate optimal threshold for classification too
-        model = clf
+        if learner not in ['DecisionTree', 'KNN']:
+            # Classificazione binaria
+            clf = XGBClassifier(use_label_encoder=False, eval_metric='logloss', random_state=0)
+            clf.fit(X_train, y_train)
+            # For classification, we typically use a threshold of 0.5 on probabilities,
+            # or we could find an optimal one if desired.
+            y_pred_proba = clf.predict_proba(X_test)[:, 1]
+            optimal_threshold = find_optimal_threshold(y_test, y_pred_proba, metric='accuracy') # Calculate optimal threshold for classification too
+            model = clf
+
+        elif learner == 'KNN':
+            clf = KNeighborsClassifier()
+            clf.fit(X_train, y_train)
+            y_pred_proba = clf.predict_proba(X_test)[:, 1]
+            optimal_threshold = find_optimal_threshold(y_test, y_pred_proba, metric='accuracy')
+            model = clf
+
+        elif learner == 'DecisionTree': 
+            clf = DecisionTreeClassifier(random_state=0)
+            clf.fit(X_train, y_train)
+            y_pred_proba = clf.predict_proba(X_test)[:, 1]
+            optimal_threshold = find_optimal_threshold(y_test, y_pred_proba, metric='accuracy')
+            model = clf
+
 
     return X_train, X_test, y_train, y_test, model, umo_input_features, model_trained_features, optimal_threshold
 
@@ -280,7 +299,7 @@ def add_noise(row, biased_column, bias, sensitive_attribute, bias_range, sensiti
 
     elif pollution_mode == 'probabilistic_pollution':
         if row[sensitive_column] == sensitive_attribute:
-            coin_toss = np.random.choice([1, 0], p=[0.6, 0.4])
+            coin_toss = np.random.choice([1, 0], p=[0.8, 0.2])
             if coin_toss == 1:
                 output_biased = row[biased_column] * bias
                 if output_biased < bias_range[biased_column][0]:
@@ -312,7 +331,8 @@ def calculate_UMO(df, umo_input_features):
     baseline = df_selected.iloc[:, 0]  # First column as baseline 
 
     # Differenza minima per considerare uno switch
-    switch_threshold = 0.05
+    switch_threshold = float(np.std(df_selected, axis=0).mean()) * 0.1  # Example: 10% of the overall std deviation
+    #switch_threshold = 0.05
 
     # Confronta ciascuna colonna con la baseline usando la soglia
     diffs = df_selected.subtract(baseline, axis=0).abs() > switch_threshold
@@ -356,7 +376,7 @@ def predict_on_biased_dataset(X_test, sensitive_column_name, sensitive_attribute
         for subset_idx, subset in enumerate(combinations(umo_input_features, i)):
             data_copy = data.copy()
 
-            # Evitato di rimuovere la feature che sta venendo inquinata (deve sempre essere presente in prediction)
+            # Evita di rimuovere la feature che sta venendo inquinata (deve sempre essere presente in prediction)
             if i > 0 and (biased_column in subset):
                 continue
 
@@ -368,6 +388,8 @@ def predict_on_biased_dataset(X_test, sensitive_column_name, sensitive_attribute
             data_for_prediction = data_copy[reg_model_features].copy()
 
             if isinstance(reg, XGBClassifier):
+                prediction_scores = reg.predict_proba(data_for_prediction)[:, 1]
+            elif isinstance(reg, DecisionTreeClassifier):
                 prediction_scores = reg.predict_proba(data_for_prediction)[:, 1]
             else:
                 prediction_scores = reg.predict(data_for_prediction)
@@ -393,7 +415,7 @@ def predict_on_biased_dataset(X_test, sensitive_column_name, sensitive_attribute
     # Calculate UMO on continuous values
     total['UMO'] = calculate_UMO(total, cols)
 
-    # Binarize predictions after UMO calculation
+    # Binarize predictions AFTER UMO calculation
     for col in cols:
         total[col] = cutoff_prediction(total[col], optimal_threshold)
 
@@ -427,6 +449,143 @@ def create_sensitive_columns_dict(m, min):
         pd.DataFrame(diz[a]).to_csv(output_path + f"/sensitive_feature_distr/iteration_{a}.csv")
     return
 
+def plot_probability_contours(model, feature_names, X_train, X_test=None, y_train=None, y_test=None, optimal_threshold=None, output_path=None, learner='model', grid_points=100, figsize=(12, 10)):
+
+    # Register contour plot directory
+    contour_dir = os.path.join(output_path, 'probability_contours') if output_path is not None else os.path.join('plots', 'probability_contours')
+    if not os.path.isdir(contour_dir):
+        os.makedirs(contour_dir)
+
+    # Convert to DataFrame if necessary
+    if isinstance(X_train, np.ndarray):
+        X_train = pd.DataFrame(X_train, columns=feature_names)
+    if X_test is not None and isinstance(X_test, np.ndarray):
+        X_test = pd.DataFrame(X_test, columns=feature_names)
+
+    # Prepare data for PCA (fit on combined train+test if available for consistent projection)
+    try:
+        pca = PCA(n_components=2)
+        if X_test is not None:
+            combined_df = pd.concat([X_train[feature_names], X_test[feature_names]], ignore_index=True)
+            X_pca_all = pca.fit_transform(combined_df.values)
+            n_train = X_train.shape[0]
+            X_train_pca = X_pca_all[:n_train]
+            X_test_pca = X_pca_all[n_train:]
+            X_pca_for_ranges = X_pca_all
+        else:
+            X_feat = X_train[feature_names].values
+            X_train_pca = pca.fit_transform(X_feat)
+            X_test_pca = None
+            X_pca_for_ranges = X_train_pca
+
+        # Determine ranges in PCA space
+        x1_min, x1_max = X_pca_for_ranges[:, 0].min(), X_pca_for_ranges[:, 0].max()
+        x2_min, x2_max = X_pca_for_ranges[:, 1].min(), X_pca_for_ranges[:, 1].max()
+
+        # Create grid in PCA space
+        x1_range = np.linspace(x1_min, x1_max, grid_points)
+        x2_range = np.linspace(x2_min, x2_max, grid_points)
+        X1_grid, X2_grid = np.meshgrid(x1_range, x2_range)
+
+        grid_points_combined = np.vstack([X1_grid.ravel(), X2_grid.ravel()]).T
+
+        # Inverse transform grid points back to original feature space for prediction
+        grid_original = pca.inverse_transform(grid_points_combined)
+        grid_df = pd.DataFrame(grid_original, columns=feature_names)
+
+        # Ensure column order matches model training features
+        grid_df = grid_df[feature_names]
+
+        # Get model predictions for grid, train and test
+        try:
+            if hasattr(model, 'predict_proba'):
+                grid_preds = model.predict_proba(grid_df)[:, 1]
+                train_preds = model.predict_proba(X_train[feature_names])[:, 1]
+                test_preds = model.predict_proba(X_test[feature_names])[:, 1] 
+            else:
+                grid_preds = model.predict(grid_df)
+                train_preds = model.predict(X_train[feature_names])
+                test_preds = model.predict(X_test[feature_names]) 
+
+                # Normalize regression outputs to [0,1] so maps and colors are comparable
+                scaler = MinMaxScaler()
+                combined_preds = grid_preds.reshape(-1, 1)
+                combined_preds = np.vstack([combined_preds, train_preds.reshape(-1, 1)])
+                if test_preds is not None:
+                    combined_preds = np.vstack([combined_preds, test_preds.reshape(-1, 1)])
+                scaler.fit(combined_preds)
+                grid_preds = scaler.transform(grid_preds.reshape(-1, 1)).flatten()
+                train_preds = scaler.transform(train_preds.reshape(-1, 1)).flatten()
+                if test_preds is not None:
+                    test_preds = scaler.transform(test_preds.reshape(-1, 1)).flatten()
+
+            # Reshape grid predictions to grid
+            Z = grid_preds.reshape(X1_grid.shape)
+
+            # Plot in PCA-space (PC1 vs PC2)
+            fig, ax = plt.subplots(figsize=figsize)
+            contour = ax.contourf(X1_grid, X2_grid, Z, levels=20, cmap='RdYlBu_r', alpha=0.8)
+            contour_lines = ax.contour(X1_grid, X2_grid, Z, levels=10, colors='black', alpha=0.3, linewidths=0.5)
+            ax.clabel(contour_lines, inline=True, fontsize=8)
+
+            # Add colorbar (shared for contour and scatter)
+            cbar = plt.colorbar(contour, ax=ax)
+            cbar.set_label('Predicted Probability', fontsize=12)
+
+            # Overlay training and test points (projected into PCA space)
+            ax.scatter(X_train_pca[:, 0], X_train_pca[:, 1], c=train_preds, cmap='RdYlBu_r', s=30, edgecolors='k', linewidths=0.4, alpha=0.9)
+            ax.scatter(X_test_pca[:, 0], X_test_pca[:, 1], c=test_preds, cmap='RdYlBu_r', s=30, edgecolors='k', linewidths=0.4, alpha=0.90)
+
+            # Add decision boundary at 0.5 probability when meaningful
+            try:
+                ax.contour(X1_grid, X2_grid, Z, levels=[0.5], colors='black', linewidths=2, linestyles='--')
+            except Exception:
+                pass
+
+            # Labels and title
+            ax.set_xlabel('PC1', fontsize=12)
+            ax.set_ylabel('PC2', fontsize=12)
+            ax.set_title(f'Probability Contour Plot: PC1 vs PC2 (PCA-reduced) - model: {learner}', fontsize=14, fontweight='bold')
+
+            # Legend
+            ax.legend(loc='upper right')
+
+            # Compute and display performance metrics (use F1 and accuracy) if true labels are provided
+            metrics_text = ''
+            if y_train is not None:
+                # Binarize predictions using provided optimal_threshold (fallback 0.5)
+                train_pred_bin = (np.array(train_preds) >= optimal_threshold).astype(int)
+            y_train_arr = np.array(y_train).astype(int)
+            train_acc = accuracy_score(y_train_arr, train_pred_bin)
+            train_f1 = f1_score(y_train_arr, train_pred_bin, zero_division=0)
+            metrics_text += f'Train — Acc: {train_acc:.3f}, F1: {train_f1:.3f}\n'
+
+            if (y_test is not None) and (X_test is not None):
+                test_pred_bin = (np.array(test_preds) >= optimal_threshold).astype(int)
+            y_test_arr = np.array(y_test).astype(int)
+            test_acc = accuracy_score(y_test_arr, test_pred_bin)
+            test_f1 = f1_score(y_test_arr, test_pred_bin, zero_division=0)
+            metrics_text += f'Test  — Acc: {test_acc:.3f}, F1: {test_f1:.3f}'
+
+            if metrics_text:
+                # place a semi-transparent text box in upper-left
+                ax.text(0.01, 0.99, metrics_text, transform=ax.transAxes, fontsize=10,
+                        verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+            # Save figure
+            plot_filename = os.path.join(contour_dir, f'contour_pca_pc1_pc2_{learner}.png')
+            plt.tight_layout()
+            plt.savefig(plot_filename, dpi=150, bbox_inches='tight')
+            plt.close()
+
+            print(f"Saved PCA contour plot: {plot_filename}")
+
+        except Exception as e:
+            print(f"Error computing predictions for contour grid or points: {e}")
+
+    except Exception as e:
+        print(f"Error fitting PCA or preparing grid for contour plotting: {e}")
+        
 def calculate_UMO_stats(feature, df_raw, performance_list, pollution_folder, sensitive_column_name):
     """
     Compute UMO statistics across collected biased runs and merge with aggregated confusion-matrix counts.
@@ -450,11 +609,7 @@ def calculate_UMO_stats(feature, df_raw, performance_list, pollution_folder, sen
     # Compute statistics on UMO distribution
     if not umo_series.empty:
         umo_mean = float(umo_series.mean())
-        umo_std = float(umo_series.std(ddof=0))
         umo_median = float(umo_series.median())
-        umo_min = float(umo_series.min())
-        umo_max = float(umo_series.max())
-        umo_range = float(umo_max - umo_min)
     else:
         umo_mean = umo_std = umo_median = umo_min = umo_max = umo_range = np.nan
 
@@ -471,11 +626,7 @@ def calculate_UMO_stats(feature, df_raw, performance_list, pollution_folder, sen
 
     # Add UMO global statistics columns (same values for each sensitive-attr row)
     summary_df['umo_mean'] = umo_mean
-    summary_df['umo_std'] = umo_std
     summary_df['umo_median'] = umo_median
-    summary_df['umo_min'] = umo_min
-    summary_df['umo_max'] = umo_max
-    summary_df['umo_range'] = umo_range
 
     # compute per-bias mean UMO grouped by sensitive attribute and insert into summary_df
     if (df_raw is not None) and (not df_raw.empty):
@@ -529,9 +680,86 @@ def calculate_UMO_stats(feature, df_raw, performance_list, pollution_folder, sen
 
     return summary_df
 
+def compute_accuracy(results_list, sensitive_column_name):
+    """
+    Compute accuracy and F1 score for each iteration.
+    Returns a dictionary with iteration -> (accuracy, f1_score)
+    """
+    iteration_metrics = {}
+    
+    for result_df in results_list:
+        if result_df.empty:
+            continue
+        
+        # Extract iteration number if available
+        iteration = result_df['iteration'].iloc[0] if 'iteration' in result_df.columns else 0
+        
+        # Get predictions and true labels
+        y_pred = result_df['mean_pred_0_removed_ft'].values
+        y_true = result_df['true_class'].values
+        
+        # Compute metrics
+        accuracy = accuracy_score(y_true, y_pred)
+        f1 = f1_score(y_true, y_pred, zero_division=0)
+        
+        if iteration not in iteration_metrics:
+            iteration_metrics[iteration] = {'accuracy': [], 'f1': []}
+        
+        iteration_metrics[iteration]['accuracy'].append(accuracy)
+        iteration_metrics[iteration]['f1'].append(f1)
+    
+    # Average across biases for each iteration
+    for iteration in iteration_metrics:
+        iteration_metrics[iteration]['accuracy'] = np.mean(iteration_metrics[iteration]['accuracy'])
+        iteration_metrics[iteration]['f1'] = np.mean(iteration_metrics[iteration]['f1'])
+    
+    return iteration_metrics
+
+def save_accuracy_csv(metrics_by_feature_pollution, output_path, feature_names, pollution_modes, num_iterations):
+    """
+    Aggregate and save accuracy and F1 scores by iteration to CSV files.
+    Creates one CSV per pollution mode with columns for each feature's accuracy and F1.
+    """
+    for pollution_mode in pollution_modes:
+        # Initialize dataframe columns for this pollution mode
+        iteration_data = {}
+        
+        for iteration in range(num_iterations):
+            for feat in feature_names:
+                key = (feat, pollution_mode)
+                if key in metrics_by_feature_pollution:
+                    metrics = metrics_by_feature_pollution[key]
+                    if iteration in metrics:
+                        acc = metrics[iteration]['accuracy']
+                        f1 = metrics[iteration]['f1']
+                        
+                        # Create column names with feature and metric type
+                        acc_col = f"{feat}_iter{iteration}_accuracy"
+                        f1_col = f"{feat}_iter{iteration}_f1"
+                        
+                        # Initialize row 0 if not yet done
+                        if 0 not in iteration_data:
+                            iteration_data[0] = {}
+                        
+                        iteration_data[0][acc_col] = acc
+                        iteration_data[0][f1_col] = f1
+        
+        # Create and save dataframe
+        if iteration_data:
+            df_metrics = pd.DataFrame(iteration_data).T
+            pollution_folder = os.path.join(output_path, pollution_mode)
+            if not os.path.isdir(pollution_folder):
+                os.makedirs(pollution_folder)
+            
+            csv_path = os.path.join(pollution_folder, "metrics_by_iteration.csv")
+            df_metrics.to_csv(csv_path, index=False)
+
 def iterate_process(X_test, y_test, feat_to_remove, sensitive_column_name, sensitive_attribute_value, num_iterations, minority, reg_model_features, umo_input_features):
     features_bias_ranges = calculate_bias_range_by_feat()
     pollution_modes = ['linear_pollution', 'probabilistic_pollution', 'probabilistic_half_lies']
+    
+    # Dictionary to store metrics for each feature and pollution mode
+    metrics_by_feature_pollution = {}
 
     if sensitive_column_name is None:
         create_sensitive_columns_dict(num_iterations, minority)
@@ -554,13 +782,19 @@ def iterate_process(X_test, y_test, feat_to_remove, sensitive_column_name, sensi
             lista_all_baseline = []
             performance_list_baseline = []
             raw_res_baseline = []  # collect raw results before further grouping (for stats)
+            results_per_iteration = {}  # Collect results for each iteration
 
             for k in range(num_iterations):
+                results_per_iteration[k] = []  # Store all results for this iteration
+                
                 for bias in np.arange(0.4, 1.6, 0.2):
                     bias = round(bias, 1)
                     res = predict_on_biased_dataset(X_test.copy(), sensitive_column_name, sensitive_attribute_value, bias, features_bias_ranges, feat, k, y_test, feat_to_remove, pollution_mode, mode='baseline', reg_model_features=reg_model_features, umo_input_features=umo_input_features)
                     res['feature'] = feat
                     res['iteration'] = k  # Add iteration number
+
+                    # Store results for this iteration (for later metrics computation)
+                    results_per_iteration[k].append(res.copy())
 
                     # keep a copy of the raw result before renaming/grouping for stats aggregation
                     res_for_stats = res.copy()
@@ -592,6 +826,13 @@ def iterate_process(X_test, y_test, feat_to_remove, sensitive_column_name, sensi
                     lista_tn_baseline.append(tn)
                     lista_fp_baseline.append(fp)
                     lista_fn_baseline.append(fn)
+                
+                # Compute accuracy and F1 for this iteration
+                iteration_metrics = compute_accuracy(results_per_iteration[k], sensitive_column_name)
+                key = (feat, pollution_mode)
+                if key not in metrics_by_feature_pollution:
+                    metrics_by_feature_pollution[key] = {}
+                metrics_by_feature_pollution[key].update(iteration_metrics)
 
             pollution_folder = output_path + f'/{pollution_mode}'
 
@@ -601,6 +842,9 @@ def iterate_process(X_test, y_test, feat_to_remove, sensitive_column_name, sensi
             else:
                 df_raw = pd.DataFrame()
             calculate_UMO_stats(feat, df_raw, performance_list_baseline, pollution_folder, sensitive_column_name)
+
+    # Save aggregated accuracy and F1 metrics to CSV files
+    save_accuracy_csv(metrics_by_feature_pollution, output_path, feature_names, pollution_modes, num_iterations)
 
     return
 
@@ -625,9 +869,10 @@ for minority_rate in [0.5]:#np.arange(0.5, 1, 0.1):
 
         sensitive_column_name = 'dummy_sensitive'
         sensitive_attribute_value = 0
+        learner = 'DecisionTree'
 
-        df, feature_weights = generate_synthetic_dataset(n_samples=10000, random_state=42)
-        X_train, X_test, y_train, y_test, cls, umo_input_features, model_trained_features, optimal_threshold = train_model_with_threshold_normalization_and_binarization(df, sensitive_column_name)
+        df, feature_weights = generate_synthetic_dataset(n_samples=100, random_state=42)
+        X_train, X_test, y_train, y_test, cls, umo_input_features, model_trained_features, optimal_threshold = train_model_with_threshold_normalization_and_binarization(df, sensitive_column_name, learner)
         feat_to_remove = [] # Assuming feat_to_remove is defined globally or passed as an argument
 
         feature_names = [x for x in umo_input_features if (x not in feat_to_remove)] # feature_names for iterate_process
@@ -646,11 +891,15 @@ for minority_rate in [0.5]:#np.arange(0.5, 1, 0.1):
         reg_model_features = model_trained_features # Get the actual feature names the model was trained with
         num_iterations = 1
 
+        # Generate contour plots for model probability forecasts (overlay train and test points)
+        plot_probability_contours(reg, reg_model_features, X_train, X_test, y_train, y_test, optimal_threshold=optimal_threshold, output_path=output_path, learner=learner, grid_points=100)
+
         iterate_process(X_test, y_test, feat_to_remove, sensitive_column_name=sensitive_column_name, sensitive_attribute_value=sensitive_attribute_value, num_iterations=num_iterations, minority=minority_rate, reg_model_features=reg_model_features, umo_input_features=umo_input_features)
         # mode_list = ['baseline']
         # make_plots('mean', output_path, feature_names, mode_list=mode_list, sensitive_column_name=sensitive_column_name, sensitive_attribute_value=sensitive_attribute_value)
         plot_umo_mean_vs_bias(output_path, feature_names, feature_weights, sensitive_column_name=sensitive_column_name, sensitive_attribute_value=sensitive_attribute_value, num_iterations=num_iterations)
         plot_umo_statistics_summary(output_path, feature_names, feature_weights, sensitive_column_name=sensitive_column_name, sensitive_attribute_value=sensitive_attribute_value, num_iterations=num_iterations)
+        
 
     else:
         for dataset_name in ['winequality-red']:
