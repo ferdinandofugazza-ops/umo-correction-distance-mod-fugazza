@@ -29,18 +29,16 @@ def score_computation (df):
 
     # Coefficienti dei componenti per interpretability
     # Ognuno di questi coefficienti è il peso di ciascun componente nel calcolo dello score
-    beta = {"x1": 3.5, "x2": 1.5, "x3": 0.1, "x4": -3.5, "x5": 2.5, "x6": 3}
+    beta = {"x1": 3.5, "x2": 1.5, "x3": 0.1, "x4": -3.5}
 
     comp_x1 = beta["x1"] * df['x1']
     comp_x2 = beta["x2"] * df['x2']
     comp_x3 = beta["x3"] * df['x3']
     comp_x4 = beta["x4"] * df['x4']
-    comp_x5 = beta["x5"] * df['x5']
-    comp_x6 = beta["x6"] * df['x6']
 
     # calcolo del punteggio generale, che si può scomporre e intepretare a livello di singoli componenti
     # lo score non tiene conto della variabile is_white
-    score = comp_x1 + comp_x2 + comp_x3 + comp_x4 + comp_x5 + comp_x6
+    score = comp_x1 + comp_x2 + comp_x3 + comp_x4 
 
     # Trasforma i punteggi in probabilità [0, 1] con softmax
     score_probability = expit(score)
@@ -73,15 +71,13 @@ def generate_synthetic_dataset(
     x2 = rng.normal(loc=0, scale=1, size=n_samples)
     x3 = rng.normal(loc=0, scale=1, size=n_samples)
     x4 = rng.normal(loc=0, scale=3.5, size=n_samples)
-    x5 = rng.normal(loc=0, scale=2, size=n_samples)
-    x6 = rng.normal(loc=0, scale=5, size=n_samples)
 
     # we treat this variable as already encoded
     # sensitive feature updated so that it is interchangeable with the other regression pipeline
     dummy_sensitive = np.random.choice([0, 1], n_samples, p=[0.5, 0.5])
 
     df = pd.DataFrame({
-        "x1": x1, "x2": x2, "x3": x3, "x4": x4, "x5": x5, "x6": x6, "dummy_sensitive": dummy_sensitive
+        "x1": x1, "x2": x2, "x3": x3, "x4": x4, "dummy_sensitive": dummy_sensitive
     })
 
     scored_df, contributions = score_computation(df)
@@ -1151,7 +1147,7 @@ def iterate_process(X_test, y_test, feat_to_remove, UMO_mode, sensitive_column_n
     return
 
 
-for minority_rate in [0.5]:#np.arange(0.5, 1, 0.1):
+for minority_rate in [0.5]:
 
     pipeline_mode = 'classification'
 
@@ -1161,25 +1157,25 @@ for minority_rate in [0.5]:#np.arange(0.5, 1, 0.1):
         sensitive_attribute_value = 0
         learner = 'DecisionTree'
 
-        df, feature_weights = generate_synthetic_dataset(n_samples=1000, random_state=42)
+        df, feature_weights = generate_synthetic_dataset(n_samples=10000, random_state=42)
         X_train, X_test, y_train, y_test, cls, umo_input_features, model_trained_features, optimal_threshold = train_model_with_threshold_normalization_and_binarization(df, sensitive_column_name, learner)
         feat_to_remove = [] # Assuming feat_to_remove is defined globally or passed as an argument
 
         feature_names = [x for x in umo_input_features if (x not in feat_to_remove)] # feature_names for iterate_process
-        output_path = "data/output/" + "synthetic_dataset_" + 'TEST' # Define output_path
+        output_path = "data/output/" + "synthetic_dataset_" + 'TRIAL_1' # Define output_path
         if not os.path.isdir(output_path):
             os.makedirs(output_path)
         subfolder_1 = output_path + '/plots'
         if not os.path.isdir(subfolder_1):
             os.makedirs(subfolder_1)
 
-        subfolder_2 = output_path + '/sensitive_feature_distr'
+        subfolder_2 = output_path + '/sensitive_feature_distr' 
         if not os.path.isdir(subfolder_2):
             os.makedirs(subfolder_2)
 
         reg = cls # Assign the trained model to 'reg'
         reg_model_features = model_trained_features # Get the actual feature names the model was trained with
-        num_iterations = 1
+        num_iterations = 10
         UMO_mode = 'discrete'
 
         # Generate contour plots for model probability forecasts (overlay train and test points)
@@ -1187,12 +1183,11 @@ for minority_rate in [0.5]:#np.arange(0.5, 1, 0.1):
 
         iterate_process(X_test, y_test, feat_to_remove, UMO_mode, sensitive_column_name=sensitive_column_name, sensitive_attribute_value=sensitive_attribute_value, num_iterations=num_iterations, minority=minority_rate, reg_model_features=reg_model_features, umo_input_features=umo_input_features)
         # mode_list = ['baseline']
-        # make_plots('mean', output_path, feature_names, mode_list=mode_list, sensitive_column_name=sensitive_column_name, sensitive_attribute_value=sensitive_attribute_value)
+        
         plot_umo_mean_vs_bias(output_path, feature_names, feature_weights, sensitive_column_name=sensitive_column_name, sensitive_attribute_value=sensitive_attribute_value, num_iterations=num_iterations)
         plot_umo_statistics_summary(output_path, feature_names, feature_weights, sensitive_column_name=sensitive_column_name, sensitive_attribute_value=sensitive_attribute_value, num_iterations=num_iterations)
-        plot_accuracy_by_group(output_path, feature_names, sensitive_column_name=sensitive_column_name, sensitive_attribute_value=sensitive_attribute_value, num_iterations=num_iterations)
-        #plot_umo_ridgeline(output_path, feature_names, mode_list=None, sensitive_column_name=sensitive_column_name)
-        plot_umo_disparity_gap(output_path, feature_names, sensitive_column_name, sensitive_attribute_value=0)
+        plot_accuracy_by_group(output_path, feature_names, feature_weights, sensitive_column_name=sensitive_column_name, sensitive_attribute_value=sensitive_attribute_value, num_iterations=num_iterations)
+        plot_umo_disparity_gap(output_path, feature_names, feature_weights, sensitive_column_name, sensitive_attribute_value=0)
         
 
     else:
